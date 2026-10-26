@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { onMounted, reactive, ref } from 'vue'
 import type { FormInstance, FormRules } from 'element-plus'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
@@ -44,15 +44,15 @@ const form = reactive<ScheduleForm>({
   owner: '',
 })
 
-/** 当前选中的快捷项（自定义时为 __CUSTOM__） */
-const cronPreset = computed(() => {
-  const matched = CRON_PRESETS.find((preset) => preset.value === form.cronExpr)
-  return matched?.value ?? CUSTOM
-})
+/** 执行周期单选框当前选中项，CUSTOM 表示自定义；独立于 cronExpr 记录，否则选自定义时会被反推回预设项 */
+const cronMode = ref<string>(CRON_PRESETS[0].value)
 
 function onPresetChange(value: string | number | boolean | undefined): void {
-  if (typeof value === 'string' && value !== CUSTOM) {
-    form.cronExpr = value
+  if (typeof value === 'string') {
+    cronMode.value = value
+    if (value !== CUSTOM) {
+      form.cronExpr = value
+    }
   }
 }
 
@@ -77,6 +77,7 @@ async function loadPage(): Promise<void> {
 function openCreate(): void {
   editId.value = null
   Object.assign(form, { taskId: undefined, cronExpr: '0 * * * * ?', jobDesc: '', owner: '' })
+  cronMode.value = CRON_PRESETS[0].value
   editVisible.value = true
 }
 
@@ -88,6 +89,7 @@ function openEdit(row: ScheduleVO): void {
     jobDesc: row.jobDesc,
     owner: row.owner,
   })
+  cronMode.value = CRON_PRESETS.find((preset) => preset.value === row.cronExpr)?.value ?? CUSTOM
   editVisible.value = true
 }
 
@@ -283,14 +285,14 @@ onMounted(async () => {
           </el-select>
         </el-form-item>
         <el-form-item label="执行周期" prop="cronExpr">
-          <el-radio-group :model-value="cronPreset" @change="onPresetChange">
+          <el-radio-group :model-value="cronMode" @change="onPresetChange">
             <el-radio-button v-for="preset in CRON_PRESETS" :key="preset.value" :value="preset.value">
               {{ preset.label }}
             </el-radio-button>
             <el-radio-button :value="CUSTOM">自定义</el-radio-button>
           </el-radio-group>
           <el-input
-            v-if="cronPreset === CUSTOM"
+            v-if="cronMode === CUSTOM"
             v-model="form.cronExpr"
             placeholder="6 位 Cron：秒 分 时 日 月 周，如 0 0/30 * * * ?"
             style="margin-top: 8px"
