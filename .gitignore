@@ -1,0 +1,16 @@
+# IDE
+.idea/
+*.iml
+
+# Build output (Maven / Node)
+target/
+node_modules/
+dist/
+
+# Logs
+logs/
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
