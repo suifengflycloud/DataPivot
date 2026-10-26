@@ -1,0 +1,118 @@
+/* DataPivot 全局样式 */
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family:
+    'Helvetica Neue',
+    Arial,
+    'PingFang SC',
+    'Hiragino Sans GB',
+    'Microsoft YaHei',
+    sans-serif;
+  font-size: 14px;
+  color: #1f2937;
+  background-color: #f1f5f9;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* 通用页面卡片 */
+.page-card {
+  background: #ffffff;
+  border-radius: 8px;
+  padding: 16px 20px;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.06);
+}
+
+/* 通用工具栏 */
+.toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.toolbar .spacer {
+  flex: 1;
+}
+
+/* 滚动条美化 */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* SQL 高亮代码块 */
+.sql-code {
+  font-family: 'JetBrains Mono', Consolas, 'Courier New', monospace;
+  font-size: 13px;
+  line-height: 1.7;
+  white-space: pre;
+  overflow: auto;
+}
+
+.sql-code .tok-keyword {
+  color: #7c3aed;
+  font-weight: 600;
+}
+
+.sql-code .tok-string {
+  color: #059669;
+}
+
+.sql-code .tok-comment {
+  color: #94a3b8;
+  font-style: italic;
+}
+
+.sql-code .tok-number {
+  color: #ea580c;
+}
+
+/* 日志面板 */
+.log-panel {
+  font-family: Consolas, 'Courier New', monospace;
+  font-size: 12px;
+  line-height: 1.8;
+  white-space: pre-wrap;
+  word-break: break-all;
+  overflow: auto;
+  background: #0f172a;
+  color: #cbd5e1;
+  border-radius: 6px;
+  padding: 12px;
+}
+
+/* 下拉菜单中的危险操作项（菜单 teleport 到 body，需要全局样式） */
+.el-dropdown-menu__item.dp-danger-item {
+  color: var(--el-color-danger, #dc2626);
+}
+
+.el-dropdown-menu__item.dp-danger-item:not(.is-disabled):hover {
+  color: var(--el-color-danger, #dc2626);
+  background-color: var(--el-color-danger-light-9, #fef0f0);
+}
+
+/* 抽屉拖拽调宽期间：禁用面板过渡动画，保证宽度实时跟手（配合 useDrawerResize） */
+.dp-drawer-resizing .el-drawer {
+  transition: none !important;
+}
