@@ -30,3 +30,23 @@ export async function api<T>(config: AxiosRequestConfig): Promise<T> {
   }
   return body.data
 }
+
+/**
+ * 统一文件下载入口：响应是原始二进制流，不走 { code, msg, data } 解包。
+ * 服务端业务失败时仍会返回 JSON 错误体（HTTP 200），此处识别后按错误提示抛出。
+ */
+export async function apiDownload(config: AxiosRequestConfig): Promise<Blob> {
+  const response = await instance.request<Blob>({ ...config, responseType: 'blob' })
+  const blob = response.data
+  if (blob.type.includes('application/json')) {
+    let msg = '下载失败'
+    try {
+      msg = (JSON.parse(await blob.text()) as ApiBody<unknown>).msg || msg
+    } catch {
+      // 错误体不是预期 JSON 时使用默认提示
+    }
+    ElMessage.error(msg)
+    throw new Error(msg)
+  }
+  return blob
+}
