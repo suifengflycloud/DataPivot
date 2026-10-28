@@ -43,6 +43,12 @@ public class TableMapping implements Serializable {
     /** 目标表名 */
     private String targetTable;
 
+    /** 增量依据字段（源表字段，如 update_time 或自增 id；全量同步时为 null） */
+    private String incColumn;
+
+    /** 上次增量同步水位值（增量字段的Max值快照，null 表示尚未同步过，首次执行全量拉取） */
+    private String incLastValue;
+
     @TableField(fill = FieldFill.INSERT)
     private LocalDateTime createTime;
 }

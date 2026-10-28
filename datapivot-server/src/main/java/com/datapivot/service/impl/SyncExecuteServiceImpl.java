@@ -20,6 +20,7 @@ import com.datapivot.mapper.TableMappingMapper;
 import com.datapivot.service.DbConnectionService;
 import com.datapivot.service.MetadataService;
 import com.datapivot.service.SyncExecuteService;
+import com.datapivot.service.support.IncrementalWatermark;
 import com.datapivot.service.support.SyncProgress;
 import com.datapivot.service.support.SyncSqlBuilder;
 import com.datapivot.service.support.ValueConverter;
@@ -268,26 +269,67 @@ public class SyncExecuteServiceImpl implements SyncExecuteService {
         ConflictStrategyEnum strategy = ConflictStrategyEnum.fromCode(task.getConflictStrategy());
         SyncSqlBuilder.checkStrategySupport(!targetPkColumns.isEmpty(), strategy, targetDisplay);
 
-        // 4. 源表总量统计（用于进度百分比）
+        // 3.5 增量同步配置：校验增量字段存在且类型受支持，并解析上次同步水位
+        boolean incremental = task.getFullSync() != null && task.getFullSync() == 0;
+        ColumnMetaVO incMeta = null;
+        Object watermarkParam = null;
+        boolean incInclusive = false;
+        if (incremental) {
+            if (mapping.getIncColumn() == null || mapping.getIncColumn().isBlank()) {
+                throw new BusinessException("表 " + sourceDisplay + " 未配置增量字段，增量同步必须为每组映射选择增量依据字段");
+            }
+            incMeta = sourceMap.get(mapping.getIncColumn().toLowerCase());
+            if (incMeta == null) {
+                throw new BusinessException("源表 " + sourceDisplay + " 中不存在增量字段 [" + mapping.getIncColumn()
+                        + "]，请重新编辑任务选择增量字段");
+            }
+            IncrementalWatermark.checkTypeSupport(incMeta, sourceDisplay, mapping.getIncColumn());
+            if (mapping.getIncLastValue() != null && !mapping.getIncLastValue().isBlank()) {
+                Object watermark = IncrementalWatermark.parse(incMeta, mapping.getIncLastValue());
+                watermarkParam = IncrementalWatermark.toBindParam(watermark);
+                // 覆盖更新/跳过写入幂等，用 >= 重放边界记录防止漏采；报错中断不容忍重复投递，用 > 严格递增
+                incInclusive = strategy != ConflictStrategyEnum.ERROR;
+            }
+        }
+        String incWhere = watermarkParam == null
+                ? null
+                : SyncSqlBuilder.buildIncWhere(sourceType, incMeta.getColumnName(), incInclusive);
+
+        // 4. 源表总量统计（用于进度百分比；增量模式统计水位之后的记录数）
         String sourceQualified = IdentifierUtils.qualifiedName(sourceType,
                 mapping.getSourceCatalog(), mapping.getSourceSchema(), mapping.getSourceTable());
-        long total = countRows(sourceConnection, sourceQualified);
+        long total = countRows(sourceConnection, sourceQualified, incWhere, watermarkParam);
         progress.increaseTotal(total);
         progress.appendLog("开始同步 " + sourceDisplay + " → " + targetDisplay
-                + "，共 " + total + " 条，冲突策略: " + strategy.getLabel());
+                + "，共 " + total + " 条，冲突策略: " + strategy.getLabel()
+                + (incremental
+                        ? (watermarkParam == null
+                                ? "（增量模式：首次执行全量拉取）"
+                                : "（增量模式：拉取水位 " + mapping.getIncLastValue()
+                                + (incInclusive ? " 及之后" : " 之后") + "的记录）")
+                        : ""));
         if (total == 0) {
-            progress.appendLog("表 " + sourceDisplay + " 无数据，跳过");
+            progress.appendLog("表 " + sourceDisplay + (incremental ? " 无新增数据，跳过" : " 无数据，跳过"));
             return;
         }
 
         // 5. 构建 SQL（表名/字段名已校验并加引号；值全部占位符）
+        //    增量模式若增量字段不在映射字段中，作为附加列拼在 SELECT 末尾，用于计算新水位
         List<String> sourceColumnNames = selectedSource.stream()
-                .map(ColumnMetaVO::getColumnName).toList();
+                .map(ColumnMetaVO::getColumnName).collect(Collectors.toCollection(ArrayList::new));
+        int incSelectIndex = -1;
+        if (incMeta != null) {
+            incSelectIndex = sourceColumnNames.indexOf(incMeta.getColumnName());
+            if (incSelectIndex < 0) {
+                sourceColumnNames.add(incMeta.getColumnName());
+                incSelectIndex = sourceColumnNames.size() - 1;
+            }
+        }
         List<String> targetColumnNames = selectedTarget.stream()
                 .map(ColumnMetaVO::getColumnName).toList();
         String targetQualified = IdentifierUtils.qualifiedName(targetType,
                 mapping.getTargetCatalog(), mapping.getTargetSchema(), mapping.getTargetTable());
-        String selectSql = SyncSqlBuilder.buildSelectSql(sourceType, sourceQualified, sourceColumnNames);
+        String selectSql = SyncSqlBuilder.buildSelectSql(sourceType, sourceQualified, sourceColumnNames, incWhere);
         String writeSql = SyncSqlBuilder.buildWriteSql(targetType, targetQualified, targetColumnNames,
                 targetPkColumns, strategy);
         int batchSize = Math.max(1, task.getBatchSize() == null ? 1000 : task.getBatchSize());
@@ -296,10 +338,14 @@ public class SyncExecuteServiceImpl implements SyncExecuteService {
         // 源连接关闭自动提交：PostgreSQL/金仓 驱动仅在事务内生效 fetchSize 流式游标
         sourceConnection.setAutoCommit(false);
         targetConnection.setAutoCommit(false);
+        Object maxWatermark = null;
         try (PreparedStatement selectPs = sourceConnection.prepareStatement(selectSql,
                 ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY);
              PreparedStatement writePs = targetConnection.prepareStatement(writeSql)) {
             selectPs.setFetchSize(batchSize);
+            if (watermarkParam != null) {
+                selectPs.setObject(1, watermarkParam);
+            }
             int inBatch = 0;
             long batchIndex = 0;
             try (ResultSet rs = selectPs.executeQuery()) {
@@ -318,6 +364,14 @@ public class SyncExecuteServiceImpl implements SyncExecuteService {
                             } else {
                                 writePs.setObject(i + 1, converted, targetMeta.getDataType());
                             }
+                        }
+                    }
+                    // 跟踪本批增量字段最大值，作为本次同步的新水位
+                    if (incSelectIndex >= 0) {
+                        Object incValue = IncrementalWatermark.normalize(incMeta, rs.getObject(incSelectIndex + 1));
+                        if (incValue != null
+                                && (maxWatermark == null || IncrementalWatermark.compare(incValue, maxWatermark) > 0)) {
+                            maxWatermark = incValue;
                         }
                     }
                     writePs.addBatch();
@@ -341,6 +395,16 @@ public class SyncExecuteServiceImpl implements SyncExecuteService {
             restoreAutoCommit(sourceConnection);
             restoreAutoCommit(targetConnection);
         }
+
+        // 7. 全部落库成功后推进增量水位（失败抛异常由执行记录如实标记，下次重跑按旧水位幂等重放）
+        if (maxWatermark != null) {
+            String newWatermark = IncrementalWatermark.toStored(maxWatermark);
+            TableMapping watermarkUpdate = new TableMapping();
+            watermarkUpdate.setId(mapping.getId());
+            watermarkUpdate.setIncLastValue(newWatermark);
+            tableMappingMapper.updateById(watermarkUpdate);
+            progress.appendLog("增量同步完成，水位更新为 " + newWatermark);
+        }
     }
 
     /** 提交一批写入并刷新进度 */
@@ -356,11 +420,17 @@ public class SyncExecuteServiceImpl implements SyncExecuteService {
         updateRecordCounts(progress);
     }
 
-    /** 总行数统计 */
-    private long countRows(Connection connection, String qualifiedTable) throws SQLException {
-        try (PreparedStatement ps = connection.prepareStatement(SyncSqlBuilder.buildCountSql(qualifiedTable));
-             ResultSet rs = ps.executeQuery()) {
-            return rs.next() ? rs.getLong(1) : 0L;
+    /** 总行数统计（whereSql 为 null 时全表统计；有条件时绑定单个水位参数） */
+    private long countRows(Connection connection, String qualifiedTable, String whereSql, Object whereParam)
+            throws SQLException {
+        try (PreparedStatement ps = connection.prepareStatement(
+                SyncSqlBuilder.buildCountSql(qualifiedTable, whereSql))) {
+            if (whereSql != null) {
+                ps.setObject(1, whereParam);
+            }
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? rs.getLong(1) : 0L;
+            }
         }
     }
 

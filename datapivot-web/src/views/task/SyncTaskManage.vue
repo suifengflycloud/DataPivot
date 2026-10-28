@@ -130,8 +130,8 @@ onMounted(() => {
       <el-table-column prop="batchSize" label="批次大小" width="90" align="center" sortable />
       <el-table-column label="同步方式" width="90" align="center">
         <template #default="{ row }">
-          <el-tag size="small" :type="row.fullSync ? 'success' : 'info'">
-            {{ row.fullSync ? '全量' : '增量(预留)' }}
+          <el-tag size="small" :type="row.fullSync ? 'success' : 'warning'" effect="plain">
+            {{ row.fullSync ? '全量' : '增量' }}
           </el-tag>
         </template>
       </el-table-column>

@@ -46,24 +46,50 @@ public class XxlJobAdminClient {
 
     /**
      * 按执行器 AppName 查询调度中心中的执行器分组 id
-     * <p>需先在调度中心【执行器管理】创建 AppName 匹配的执行器。</p>
+     * <p>分组不存在时自动创建（自动注册模式），执行器随后会把自身地址注册进来。</p>
      */
     public int queryJobGroupId(String appname) {
+        int found = findJobGroupId(appname);
+        if (found > 0) {
+            return found;
+        }
+        createJobGroup(appname);
+        found = findJobGroupId(appname);
+        if (found > 0) {
+            return found;
+        }
+        throw new BusinessException("已自动创建执行器分组但查询未生效，请在调度中心【执行器管理】中确认 AppName=["
+                + appname + "] 的执行器状态");
+    }
+
+    /** 查询执行器分组 id，不存在返回 0 */
+    private int findJobGroupId(String appname) {
         MultiValueMap<String, String> form = new LinkedMultiValueMap<>();
         form.add("start", "0");
         form.add("length", "50");
         form.add("appname", appname);
         JsonNode result = post("/jobgroup/pageList", form);
-        JsonNode data = result.get("data");
-        if (data != null && data.isArray()) {
+        JsonNode data = result.path("data");
+        if (data.isArray()) {
             for (JsonNode item : data) {
                 if (appname.equals(item.path("appname").asText())) {
                     return item.path("id").asInt();
                 }
             }
         }
-        throw new BusinessException("未在 XXL-Job 调度中心找到 AppName=[" + appname + "] 的执行器，"
-                + "请先在调度中心【执行器管理】中创建该执行器（自动注册即可）");
+        return 0;
+    }
+
+    /** 自动创建执行器分组（地址类型=自动注册，执行器上线后自动填充地址） */
+    private void createJobGroup(String appname) {
+        MultiValueMap<String, String> form = new LinkedMultiValueMap<>();
+        form.add("appname", appname);
+        // xxl_job_group.title 列仅 VARCHAR(12)，标题必须 ≤12 字符
+        form.add("title", "DataPivot");
+        form.add("addressType", "0");
+        form.add("addressList", "");
+        post("/jobgroup/save", form);
+        log.info("XXL-Job 执行器分组 [{}] 不存在，已自动创建", appname);
     }
 
     /**
@@ -154,14 +180,15 @@ public class XxlJobAdminClient {
         try {
             ResponseEntity<String> response = doPost(path, form);
             JsonNode node = MAPPER.readTree(response.getBody());
-            if (node.path("code").asInt() != 200) {
+            // /jobgroup/pageList 等接口返回 DataTables 分页结构（无 code 字段），仅对 ReturnT 结构校验业务码
+            if (node.hasNonNull("code") && node.get("code").asInt() != 200) {
                 String msg = node.path("msg").asText("调度中心返回失败");
                 // 登录态失效时重登一次再试
                 if (msg.contains("登录") || msg.contains("login")) {
                     this.cookieValue = null;
                     login();
                     node = MAPPER.readTree(doPost(path, form).getBody());
-                    if (node.path("code").asInt() != 200) {
+                    if (node.hasNonNull("code") && node.get("code").asInt() != 200) {
                         throw new BusinessException("XXL-Job 调度中心操作失败: " + node.path("msg").asText());
                     }
                 } else {

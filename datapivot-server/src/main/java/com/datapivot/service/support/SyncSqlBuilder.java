@@ -31,9 +31,30 @@ public final class SyncSqlBuilder {
         return "SELECT " + columnList + " FROM " + qualifiedTable;
     }
 
+    /** 源表读取 SQL（增量模式：whereSql 为完整的 "WHERE ..." 条件或 null） */
+    public static String buildSelectSql(DbTypeEnum dbType, String qualifiedTable, List<String> columns, String whereSql) {
+        return whereSql == null
+                ? buildSelectSql(dbType, qualifiedTable, columns)
+                : buildSelectSql(dbType, qualifiedTable, columns) + " " + whereSql;
+    }
+
     /** 行数统计 SQL */
     public static String buildCountSql(String qualifiedTable) {
         return "SELECT COUNT(*) FROM " + qualifiedTable;
+    }
+
+    /** 行数统计 SQL（增量模式：whereSql 为完整的 "WHERE ..." 条件或 null） */
+    public static String buildCountSql(String qualifiedTable, String whereSql) {
+        return whereSql == null ? buildCountSql(qualifiedTable) : buildCountSql(qualifiedTable) + " " + whereSql;
+    }
+
+    /**
+     * 增量拉取条件：水位比较符按冲突策略选择。
+     * <p>覆盖更新/跳过策略写入幂等，用 &gt;= 重放边界记录防止同值新写入漏采；
+     * 报错中断策略不容忍重复投递，用 &gt; 严格递增。</p>
+     */
+    public static String buildIncWhere(DbTypeEnum dbType, String incColumn, boolean inclusive) {
+        return "WHERE " + IdentifierUtils.quote(incColumn, dbType) + (inclusive ? " >= ?" : " > ?");
     }
 
     /**

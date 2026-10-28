@@ -9,6 +9,7 @@ import { useConnectionStore } from '@/stores/connection'
 import type {
   ColumnMappingItem,
   ColumnMappingRow,
+  ColumnMeta,
   ConflictStrategy,
   SyncTaskDTO,
   SyncTaskDetail,
@@ -65,6 +66,16 @@ const activeMapping = computed(
   () => mappings.value.find((mapping) => mapping.key === activeMappingKey.value) ?? null,
 )
 
+/** 是否增量同步模式 */
+const incremental = computed(() => !form.fullSync)
+
+/** 增量字段候选：仅日期时间/数值类型（水位比较要求单调可比较） */
+function incColumnOptions(mapping: TableMappingRow): ColumnMeta[] {
+  return mapping.sourceColumns.filter(
+    (column) => column.typeCategory === 'DATETIME' || column.typeCategory === 'NUMBER',
+  )
+}
+
 /** 已勾选且目标字段完整的映射数量校验结果 */
 function mappingErrorText(): string | null {
   if (mappings.value.length === 0) {
@@ -74,6 +85,9 @@ function mappingErrorText(): string | null {
     const label = `${mapping.sourceTable?.tableName ?? '?'} → ${mapping.targetTable?.tableName ?? '?'}`
     if (!mapping.sourceTable || !mapping.targetTable) {
       return `表映射 [${label}] 未选择完整，请同时选择源表与目标表`
+    }
+    if (incremental.value && !mapping.incColumn) {
+      return `表映射 [${label}] 未选择增量依据字段（如 update_time 或自增 id）`
     }
     const selected = mapping.columns.filter((row) => row.selected)
     if (selected.length === 0) {
@@ -126,6 +140,7 @@ async function onOpen(): Promise<void> {
         sourceColumns: [],
         targetColumns: [],
         columns: [],
+        incColumn: mappingVO.incColumn ?? null,
       }
       mappings.value.push(row)
       activeMappingKey.value = row.key
@@ -201,6 +216,7 @@ function addMapping(): void {
     sourceColumns: [],
     targetColumns: [],
     columns: [],
+    incColumn: null,
   }
   mappings.value.push(row)
   activeMappingKey.value = row.key
@@ -216,8 +232,9 @@ function removeMapping(key: number): void {
   }
 }
 
-/** 源表/目标表选择变化：拉取两端字段并初始化映射行 */
+/** 源表/目标表选择变化：拉取两端字段并初始化映射行（换表后原增量字段失效） */
 function onMappingTableChange(mapping: TableMappingRow): void {
+  mapping.incColumn = null
   if (mapping.sourceTable && mapping.targetTable) {
     loadColumnsForMapping(mapping)
   } else {
@@ -294,6 +311,7 @@ async function handleSave(): Promise<void> {
       targetCatalog: mapping.targetTable?.catalog ?? null,
       targetSchema: mapping.targetTable?.schema ?? null,
       targetTable: mapping.targetTable?.tableName ?? '',
+      incColumn: incremental.value ? mapping.incColumn : null,
       columns: mapping.columns
         .filter((row) => row.selected && row.target)
         .map((row) => ({
@@ -440,6 +458,30 @@ function handleClose(): void {
           <span v-else>—</span>
         </template>
       </el-table-column>
+      <el-table-column min-width="150">
+        <template #header>
+          增量字段
+          <span v-if="!incremental" class="inc-header-tip">（全量模式无需）</span>
+        </template>
+        <template #default="{ row }">
+          <el-select
+            v-if="incremental"
+            v-model="(row as TableMappingRow).incColumn"
+            placeholder="选择增量依据字段"
+            filterable
+            size="small"
+            style="width: 100%"
+          >
+            <el-option
+              v-for="column in incColumnOptions(row as TableMappingRow)"
+              :key="column.columnName"
+              :value="column.columnName"
+              :label="`${column.columnName}（${column.typeName}）`"
+            />
+          </el-select>
+          <span v-else class="inc-na">—</span>
+        </template>
+      </el-table-column>
       <el-table-column label="操作" width="170" align="center">
         <template #default="{ row }">
           <el-button
@@ -513,8 +555,15 @@ function handleClose(): void {
       <el-form-item label="同步方式">
         <el-radio-group v-model="form.fullSync">
           <el-radio-button :value="true">全量同步</el-radio-button>
-          <el-radio-button :value="false" disabled>增量同步（预留）</el-radio-button>
+          <el-radio-button :value="false">增量同步</el-radio-button>
         </el-radio-group>
+        <div class="strategy-desc">
+          {{
+            form.fullSync
+              ? '每次执行清空式比对全表数据，按冲突策略写入目标表，适合首次迁移或定期对账。'
+              : '按每组映射选择的增量字段（如 update_time / 自增 id）拉取「上次水位之后」的新增与变更记录写入目标表；首次执行无水位自动全量拉取，请确保增量字段单调递增且不为空。'
+          }}
+        </div>
       </el-form-item>
       <el-form-item label="备注">
         <el-input
@@ -563,8 +612,20 @@ function handleClose(): void {
 .strategy-desc {
   font-size: 12px;
   color: #94a3b8;
-  margin-top: 4px;
+  /* el-form-item 内容区为 flex 布局，占满一行才能换行到按钮下方，避免与单选按钮挤在同一行 */
+  width: 100%;
+  margin-top: 6px;
   line-height: 1.5;
+}
+
+.inc-header-tip {
+  font-size: 11px;
+  color: #94a3b8;
+  font-weight: 400;
+}
+
+.inc-na {
+  color: #cbd5e1;
 }
 
 .inline-tip {

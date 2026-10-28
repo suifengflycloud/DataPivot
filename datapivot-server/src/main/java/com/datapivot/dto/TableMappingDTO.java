@@ -42,6 +42,11 @@ public class TableMappingDTO implements Serializable {
     @Pattern(regexp = "^[A-Za-z0-9_$#\\u4e00-\\u9fa5]+$", message = "目标表名含非法字符")
     private String targetTable;
 
+    /** 增量依据字段（源表字段，增量同步时必填） */
+    @Size(max = 128, message = "增量字段长度不能超过128字符")
+    @Pattern(regexp = "^[A-Za-z0-9_$#\\u4e00-\\u9fa5]+$", message = "增量字段名含非法字符")
+    private String incColumn;
+
     /** 字段映射（至少配置一条） */
     @NotEmpty(message = "每组表映射至少配置一个字段映射")
     @Valid

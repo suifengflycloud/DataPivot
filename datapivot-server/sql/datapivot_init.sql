@@ -41,7 +41,7 @@ CREATE TABLE IF NOT EXISTS `dp_sync_task` (
   `target_conn_id`    BIGINT       NOT NULL COMMENT '目标数据库连接id',
   `conflict_strategy` VARCHAR(20)  NOT NULL DEFAULT 'OVERWRITE' COMMENT '主键冲突策略: OVERWRITE/SKIP/ERROR',
   `batch_size`        INT          NOT NULL DEFAULT 1000 COMMENT '同步批次大小(条/批)',
-  `full_sync`         TINYINT      NOT NULL DEFAULT 1 COMMENT '是否全量同步: 1全量 0增量(预留)',
+  `full_sync`         TINYINT      NOT NULL DEFAULT 1 COMMENT '是否全量同步: 1全量 0增量',
   `remark`            VARCHAR(300)          DEFAULT NULL COMMENT '备注',
   `create_time`       DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   `update_time`       DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
@@ -63,6 +63,8 @@ CREATE TABLE IF NOT EXISTS `dp_table_mapping` (
   `target_catalog` VARCHAR(128)          DEFAULT NULL COMMENT '目标表catalog',
   `target_schema`  VARCHAR(128)          DEFAULT NULL COMMENT '目标表schema',
   `target_table`   VARCHAR(200) NOT NULL COMMENT '目标表名',
+  `inc_column`     VARCHAR(128)          DEFAULT NULL COMMENT '增量依据字段（源表字段，如 update_time/自增id，全量同步为 null）',
+  `inc_last_value` VARCHAR(64)           DEFAULT NULL COMMENT '上次增量同步水位值（增量字段Max值快照，null 表示首次执行将全量拉取）',
   `create_time`    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
   PRIMARY KEY (`id`),
   KEY `idx_task_id` (`task_id`)

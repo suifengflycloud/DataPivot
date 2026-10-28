@@ -131,6 +131,8 @@ export interface TableMappingVO {
   targetSchema: string | null
   targetTable: string
   targetDisplayName: string
+  incColumn: string | null
+  incLastValue: string | null
   columns: ColumnMappingItem[]
 }
 
@@ -146,6 +148,8 @@ export interface TableMappingRow {
   sourceColumns: ColumnMeta[]
   targetColumns: ColumnMeta[]
   columns: ColumnMappingRow[]
+  /** 增量依据字段（增量同步模式使用，源表字段名） */
+  incColumn: string | null
 }
 
 /** 任务编辑器内的字段映射行 */
@@ -171,6 +175,8 @@ export interface SyncTaskDTO {
     targetCatalog: string | null
     targetSchema: string | null
     targetTable: string
+    /** 增量依据字段（全量同步传 null） */
+    incColumn: string | null
     columns: ColumnMappingItem[]
   }[]
 }

@@ -29,6 +29,7 @@ import org.springframework.util.StringUtils;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
 /**
@@ -88,6 +89,8 @@ public class SyncTaskServiceImpl implements SyncTaskService {
             mappingVO.setTargetSchema(mapping.getTargetSchema());
             mappingVO.setTargetTable(mapping.getTargetTable());
             mappingVO.setTargetDisplayName(buildDisplayName(mapping.getTargetSchema(), mapping.getTargetTable()));
+            mappingVO.setIncColumn(mapping.getIncColumn());
+            mappingVO.setIncLastValue(mapping.getIncLastValue());
             columnMappingMapper.selectList(new LambdaQueryWrapper<ColumnMapping>()
                             .eq(ColumnMapping::getMappingId, mapping.getId()))
                     .forEach(cm -> {
@@ -113,7 +116,7 @@ public class SyncTaskServiceImpl implements SyncTaskService {
         SyncTask task = new SyncTask();
         applyDto(task, dto);
         taskMapper.insert(task);
-        saveMappings(task.getId(), dto.getMappings());
+        saveMappings(task.getId(), dto, Map.of());
     }
 
     @Override
@@ -125,9 +128,12 @@ public class SyncTaskServiceImpl implements SyncTaskService {
         task.setId(id);
         applyDto(task, dto);
         taskMapper.updateById(task);
-        // 映射配置整体替换：先删旧再插新（子表物理删除）
+        // 映射配置整体替换：先删旧再插新（子表物理删除）；替换前快照旧增量水位，配置未变的映射原样继承
+        Map<String, TableMapping> oldMappings = tableMappingMapper.selectList(
+                        new LambdaQueryWrapper<TableMapping>().eq(TableMapping::getTaskId, id))
+                .stream().collect(Collectors.toMap(this::mappingKey, Function.identity(), (a, b) -> a));
         tableMappingMapper.delete(new LambdaQueryWrapper<TableMapping>().eq(TableMapping::getTaskId, id));
-        saveMappings(id, dto.getMappings());
+        saveMappings(id, dto, oldMappings);
     }
 
     @Override
@@ -140,9 +146,10 @@ public class SyncTaskServiceImpl implements SyncTaskService {
         taskMapper.deleteById(id);
     }
 
-    /** 保存表映射与字段映射 */
-    private void saveMappings(Long taskId, List<TableMappingDTO> mappingDTOs) {
-        for (TableMappingDTO mappingDTO : mappingDTOs) {
+    /** 保存表映射与字段映射（增量模式写入增量字段；oldMappings 非空时继承未变化的增量水位） */
+    private void saveMappings(Long taskId, SyncTaskDTO dto, Map<String, TableMapping> oldMappings) {
+        boolean incremental = Boolean.FALSE.equals(dto.getFullSync());
+        for (TableMappingDTO mappingDTO : dto.getMappings()) {
             TableMapping mapping = new TableMapping();
             mapping.setTaskId(taskId);
             mapping.setSourceCatalog(mappingDTO.getSourceCatalog());
@@ -151,6 +158,14 @@ public class SyncTaskServiceImpl implements SyncTaskService {
             mapping.setTargetCatalog(mappingDTO.getTargetCatalog());
             mapping.setTargetSchema(mappingDTO.getTargetSchema());
             mapping.setTargetTable(mappingDTO.getTargetTable());
+            if (incremental) {
+                mapping.setIncColumn(mappingDTO.getIncColumn().trim());
+                // 源/目标表与增量字段都未变化时继承旧水位，避免编辑任务后重复同步历史数据
+                TableMapping old = oldMappings.get(mappingKey(mapping));
+                if (old != null && mapping.getIncColumn().equalsIgnoreCase(old.getIncColumn())) {
+                    mapping.setIncLastValue(old.getIncLastValue());
+                }
+            }
             tableMappingMapper.insert(mapping);
             for (var columnDTO : mappingDTO.getColumns()) {
                 ColumnMapping columnMapping = new ColumnMapping();
@@ -162,13 +177,29 @@ public class SyncTaskServiceImpl implements SyncTaskService {
         }
     }
 
-    /** 保存前校验：连接存在、源目标不同连接、映射无重复 */
+    /** 表映射唯一键：源/目标 catalog、schema、表名组合（用于编辑时水位继承匹配） */
+    private String mappingKey(TableMapping mapping) {
+        return String.join("|",
+                nullSafe(mapping.getSourceCatalog()), nullSafe(mapping.getSourceSchema()), mapping.getSourceTable(),
+                nullSafe(mapping.getTargetCatalog()), nullSafe(mapping.getTargetSchema()), mapping.getTargetTable());
+    }
+
+    private String nullSafe(String value) {
+        return value == null ? "" : value;
+    }
+
+    /** 保存前校验：连接存在、源目标不同连接、映射无重复、增量模式必须配置增量字段 */
     private void validate(SyncTaskDTO dto) {
         connectionService.getByIdNotNull(dto.getSourceConnId());
         connectionService.getByIdNotNull(dto.getTargetConnId());
         ConflictStrategyEnum.fromCode(dto.getConflictStrategy());
+        boolean incremental = Boolean.FALSE.equals(dto.getFullSync());
         // 同一组映射内字段映射不得重复
         for (TableMappingDTO mapping : dto.getMappings()) {
+            if (incremental && !StringUtils.hasText(mapping.getIncColumn())) {
+                throw new BusinessException("增量同步模式下，表映射 [" + mapping.getSourceTable() + " → "
+                        + mapping.getTargetTable() + "] 必须选择增量依据字段（如 update_time 或自增 id）");
+            }
             long distinct = mapping.getColumns().stream()
                     .map(c -> c.getSourceColumn().toLowerCase() + "->" + c.getTargetColumn().toLowerCase())
                     .distinct().count();

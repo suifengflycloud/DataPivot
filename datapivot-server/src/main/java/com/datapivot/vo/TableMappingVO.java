@@ -34,6 +34,12 @@ public class TableMappingVO implements Serializable {
     /** 目标表展示名 */
     private String targetDisplayName;
 
+    /** 增量依据字段（增量同步任务返回） */
+    private String incColumn;
+
+    /** 上次增量同步水位值（null 表示尚未执行过增量同步） */
+    private String incLastValue;
+
     /** 字段映射 */
     private List<ColumnMappingVO> columns = new ArrayList<>();
 
